@@ -109,59 +109,76 @@ def clean_json_response(response_text: str) -> str:
 
 
 def extract_bank_statement(
-    pdf_path: Path,
-    model: str = "gemini-2.0-flash",
-    dpi: int = 200
+    file_path: Optional[Path] = None,
+    file_bytes: Optional[bytes] = None,
+    file_name: str = "",
+    model: str = "gemini-2.5-flash",
+    dpi: int = 200,
+    status_callback=None
 ) -> dict:
     """
     Extrait les données d'un relevé bancaire via Gemini Vision.
-    
-    Args:
-        pdf_path: Chemin vers le fichier PDF
-        model: Modèle Gemini à utiliser
-        dpi: Résolution pour la conversion PDF → Image
-    
-    Returns:
-        Dictionnaire contenant les données extraites:
-        {
-            "banque": str,
-            "numero_compte": str,
-            "titulaire": str,
-            "periode": str,
-            "solde_initial": float | None,
-            "solde_final": float | None,
-            "devise": str,
-            "transactions": [...]
-        }
-    
-    Raises:
-        ValueError: Si la clé API n'est pas configurée
-        Exception: Si l'extraction échoue
+    Supporte PDF et Images (PNG, JPG).
     """
     client = get_gemini_client()
     
-    # Convertir le PDF en images
-    images = pdf_to_images(pdf_path, dpi=dpi)
-    
-    # Préparer les parties du message (prompt + images)
     parts = [EXTRACTION_PROMPT]
     
-    for i, img in enumerate(images):
-        img_bytes = image_to_bytes(img)
+    # Déterminer le type de fichier
+    extension = ""
+    if file_path:
+        extension = file_path.suffix.lower()
+    elif file_name:
+        extension = Path(file_name).suffix.lower()
+        
+    if extension == ".pdf":
+        if status_callback: status_callback("Converting PDF to images...")
+        if file_path:
+            images = pdf_to_images(file_path, dpi=dpi)
+        else:
+            # Handle bytes if needed, but for now we usually have files
+            import tempfile
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
+                tmp.write(file_bytes)
+                tmp_path = Path(tmp.name)
+            images = pdf_to_images(tmp_path, dpi=dpi)
+            os.unlink(tmp_path)
+            
+        for i, img in enumerate(images):
+            if status_callback: status_callback(f"Preparing page {i+1}...")
+            img_bytes = image_to_bytes(img)
+            parts.append(
+                types.Part.from_bytes(
+                    data=img_bytes,
+                    mime_type="image/png"
+                )
+            )
+    elif extension in [".png", ".jpg", ".jpeg"]:
+        if status_callback: status_callback("Processing image...")
+        if file_path:
+            with open(file_path, "rb") as f:
+                img_data = f.read()
+        else:
+            img_data = file_bytes
+            
+        mime = "image/png" if extension == ".png" else "image/jpeg"
         parts.append(
             types.Part.from_bytes(
-                data=img_bytes,
-                mime_type="image/png"
+                data=img_data,
+                mime_type=mime
             )
         )
-    
-    # Appel à Gemini avec gestion des erreurs
+    else:
+        raise ValueError(f"Format non supporté : {extension}")
+
+    # Appel à Gemini
+    if status_callback: status_callback(f"Gemini analysis ({model})...")
     try:
         response = client.models.generate_content(
             model=model,
             contents=parts,
             config=types.GenerateContentConfig(
-                temperature=0.1,  # Basse température pour plus de précision
+                temperature=0.1,
                 max_output_tokens=8192,
             )
         )
@@ -169,13 +186,15 @@ def extract_bank_statement(
         error_str = str(api_error)
         if "429" in error_str or "RESOURCE_EXHAUSTED" in error_str:
             raise QuotaExceededError(
-                f"Quota API épuisé pour le modèle {model}. "
-                f"Essayez 'gemini-1.5-flash' ou attendez quelques minutes."
+                f"Quota API épuisé pour le modèle {model}."
             )
         raise Exception(f"Erreur API Gemini: {error_str}")
     
-    # Parser la réponse JSON
+    # Parser la réponse
     response_text = response.text
+    if not response_text:
+        raise Exception("Gemini a renvoyé une réponse vide.")
+        
     clean_text = clean_json_response(response_text)
     
     try:

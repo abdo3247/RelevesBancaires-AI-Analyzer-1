@@ -121,16 +121,21 @@ def show_upload_section():
     
     with col1:
         uploaded_files = st.file_uploader(
-            "Déposez vos relevés PDF ici (plusieurs fichiers acceptés)",
-            type=["pdf"],
+            "Déposez vos relevés ici (PDF, PNG, JPG)",
+            type=["pdf", "png", "jpg", "jpeg"],
             accept_multiple_files=True,
-            help="Formats supportés: PDF (natifen ou scanné)"
+            help="Formats supportés: PDF, PNG, JPEG. Taille max: 50 Mo par fichier."
         )
 
     with col2:
         st.markdown("**Ou depuis data/raw:**")
         data_dir = Path("data/raw")
-        existing_files = list(data_dir.glob("*.pdf")) if data_dir.exists() else []
+        # Support multipes extensions en local
+        existing_files = []
+        if data_dir.exists():
+            for ext in [".pdf", ".png", ".jpg", ".jpeg"]:
+                existing_files.extend(list(data_dir.glob(f"*{ext}")))
+        
         selected_local_files = st.multiselect(
             "Fichiers locaux",
             options=[f.name for f in existing_files],
@@ -139,11 +144,18 @@ def show_upload_section():
 
     # Combiner les fichiers à traiter
     files_to_process = []
+    MAX_SIZE_MB = 50
     
     if uploaded_files:
         for uf in uploaded_files:
-            # Sauvegarder temp
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
+            # Vérifier la taille (20 Mo)
+            if uf.size > MAX_SIZE_MB * 1024 * 1024:
+                st.error(f"❌ {uf.name} est trop volumineux (> {MAX_SIZE_MB} Mo).")
+                continue
+                
+            # Sauvegarder temp avec la bonne extension
+            ext = Path(uf.name).suffix.lower()
+            with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp:
                 tmp.write(uf.read())
                 files_to_process.append({"path": Path(tmp.name), "name": uf.name})
     
@@ -161,38 +173,43 @@ def show_upload_section():
         
         if st.button(f"🔍 Lancer l'analyse de {len(files_to_process)} fichiers", type="primary", disabled=not api_ready):
             progress_bar = st.progress(0)
-            status_text = st.empty()
             
             success_count = 0
             errors = []
             
             for i, file_info in enumerate(files_to_process):
-                status_text.text(f"Traitement de {file_info['name']} ({i+1}/{len(files_to_process)})...")
-                
-                try:
-                    process_single_file(file_info['path'])
-                    success_count += 1
-                except Exception as e:
-                    errors.append(f"{file_info['name']}: {str(e)}")
+                # Utilisation de st.status pour une meilleure UX de progression
+                with st.status(f"Analyse de {file_info['name']} ({i+1}/{len(files_to_process)})...", expanded=True) as status:
+                    try:
+                        # Wrapper pour le callback : status.update attend des kwargs, pas un argument positionnel
+                        def update_status(msg):
+                            status.update(label=msg)
+                        
+                        process_single_file(file_info['path'], update_status)
+                        success_count += 1
+                        status.update(label=f"✅ {file_info['name']} terminé !", state="complete", expanded=False)
+                    except Exception as e:
+                        errors.append(f"{file_info['name']}: {str(e)}")
+                        status.update(label=f"❌ Erreur sur {file_info['name']}", state="error", expanded=True)
+                        st.error(f"Erreur Gemini: {str(e)}")
+
                 
                 progress_bar.progress((i + 1) / len(files_to_process))
-            
-            status_text.text("Terminé !")
             
             if success_count > 0:
                 st.success(f"✅ {success_count} fichiers traités avec succès !")
             
             if errors:
-                st.error(f"❌ {len(errors)} erreurs survenues :")
+                st.error(f"❌ {len(errors)} erreurs survenues.")
                 for err in errors:
                     st.write(f"- {err}")
 
 
-def process_single_file(file_path: Path):
+def process_single_file(file_path: Path, status_callback=None):
     """Traite un fichier unique et sauvegarde en silence."""
     model = st.session_state.get("gemini_model", "gemini-2.5-flash")
     parser = AWBGeminiParser(model=model)
-    releve = parser.parse(file_path)
+    releve = parser.parse(file_path, status_callback=status_callback)
     
     if releve:
         db.save_releve(releve)

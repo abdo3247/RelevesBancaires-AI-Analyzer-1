@@ -34,26 +34,28 @@ class AWBGeminiParser(BaseParser):
     def can_process(self, file_path: Path) -> bool:
         """
         Vérifie si le fichier peut être traité.
-        
-        Pour l'instant, on accepte tous les PDF. Une amélioration future
-        pourrait détecter spécifiquement les relevés AWB.
+        Supporte PDF, PNG, JPG, JPEG.
         """
-        return file_path.suffix.lower() == ".pdf"
+        return file_path.suffix.lower() in [".pdf", ".png", ".jpg", ".jpeg"]
     
-    def parse(self, file_path: Path) -> Optional[ReleveBancaire]:
+    def parse(self, file_path: Path, status_callback=None) -> Optional[ReleveBancaire]:
         """
         Parse un relevé bancaire AWB via Gemini Vision.
         
         Args:
-            file_path: Chemin vers le fichier PDF
+            file_path: Chemin vers le fichier
+            status_callback: Fonction de callback pour le statut
             
         Returns:
-            ReleveBancaire avec toutes les transactions extraites,
-            ou None si l'extraction échoue
+            ReleveBancaire avec toutes les transactions extraites
         """
         try:
             # Extraction via Gemini
-            data = extract_bank_statement(file_path, model=self.model)
+            data = extract_bank_statement(
+                file_path=file_path, 
+                model=self.model,
+                status_callback=status_callback
+            )
             
             # Conversion en objets du modèle
             transactions = []

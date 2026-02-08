@@ -35,20 +35,21 @@ def get_gemini_client() -> genai.Client:
         )
     return genai.Client(api_key=api_key)
 
-# Prompt optimisé pour l'extraction de relevés bancaires AWB
-EXTRACTION_PROMPT = """Analyse ce relevé bancaire Attijariwafa Bank et extrait TOUTES les informations visibles au format JSON strictement valide.
+# Prompt générique pour l'extraction de relevés bancaires (toutes banques)
+EXTRACTION_PROMPT = """Analyse ce relevé bancaire et extrait TOUTES les informations visibles au format JSON strictement valide.
 
 INSTRUCTIONS IMPORTANTES:
-1. Extrais TOUTES les transactions visibles, ligne par ligne
-2. Les montants doivent être des nombres décimaux (utilise le point comme séparateur décimal)
-3. Si un champ débit est vide, mets null. Si un champ crédit est vide, mets null.
-4. La date doit être au format "JJ/MM/AAAA"
-5. Le libellé doit contenir la description complète de l'opération
+1. IDENTIFIE automatiquement la banque (Attijariwafa Bank, Bank of Africa, Crédit Agricole du Maroc, CIH, BMCE, etc.)
+2. Extrais TOUTES les transactions visibles, ligne par ligne
+3. Les montants doivent être des nombres décimaux (utilise le point comme séparateur décimal)
+4. Si un champ débit est vide, mets null. Si un champ crédit est vide, mets null.
+5. La date doit être au format "JJ/MM/AAAA"
+6. Le libellé doit contenir la description complète de l'opération
 
 Retourne UNIQUEMENT le JSON suivant (pas de texte avant ou après):
 
 {
-  "banque": "Attijariwafa Bank",
+  "banque": "Nom exact de la banque détecté sur le document",
   "numero_compte": "numéro du compte extrait",
   "titulaire": "nom du titulaire si visible",
   "periode": "période du relevé (ex: Janvier 2025)",
@@ -66,6 +67,7 @@ Retourne UNIQUEMENT le JSON suivant (pas de texte avant ou après):
   ]
 }
 """
+
 
 
 def pdf_to_images(pdf_path: Path, dpi: int = 200) -> list[Image.Image]:
@@ -112,7 +114,7 @@ def extract_bank_statement(
     file_path: Optional[Path] = None,
     file_bytes: Optional[bytes] = None,
     file_name: str = "",
-    model: str = "gemini-2.5-flash",
+    model: str = "gemini-3-flash-preview",
     dpi: int = 200,
     status_callback=None
 ) -> dict:
@@ -179,7 +181,7 @@ def extract_bank_statement(
             contents=parts,
             config=types.GenerateContentConfig(
                 temperature=0.1,
-                max_output_tokens=8192,
+                max_output_tokens=16384,  # Augmenté pour les gros relevés
             )
         )
     except Exception as api_error:
@@ -194,13 +196,38 @@ def extract_bank_statement(
     response_text = response.text
     if not response_text:
         raise Exception("Gemini a renvoyé une réponse vide.")
+    
+    # Vérifier si la réponse est du texte valide (pas des données binaires)
+    # Gemini peut parfois retourner des bytes nuls
+    if response_text.startswith('\x00') or all(c == '0' for c in response_text[:100] if c.isalnum()):
+        raise Exception(
+            f"Gemini a retourné des données binaires invalides au lieu de JSON. "
+            f"Essayez un autre modèle ou vérifiez que le fichier est lisible."
+        )
+    
+    # Vérifier si la réponse a été tronquée
+    finish_reason = None
+    if response.candidates and len(response.candidates) > 0:
+        finish_reason = response.candidates[0].finish_reason
         
     clean_text = clean_json_response(response_text)
+    
+    # Tenter de réparer un JSON tronqué
+    if not clean_text.rstrip().endswith("}"):
+        # La réponse est probablement tronquée, essayer de fermer le JSON
+        clean_text = clean_text.rstrip()
+        # Compter les accolades ouvertes
+        open_braces = clean_text.count("{") - clean_text.count("}")
+        open_brackets = clean_text.count("[") - clean_text.count("]")
+        # Fermer les structures ouvertes
+        clean_text += "]" * open_brackets + "}" * open_braces
     
     try:
         data = json.loads(clean_text)
     except json.JSONDecodeError as e:
-        raise Exception(f"Erreur de parsing JSON: {e}\nRéponse brute: {response_text}")
+        # Afficher une portion plus courte de la réponse pour le debug
+        preview = response_text[:500] + "..." if len(response_text) > 500 else response_text
+        raise Exception(f"Erreur de parsing JSON (réponse potentiellement tronquée): {e}\nAperçu: {preview}")
     
     return data
 

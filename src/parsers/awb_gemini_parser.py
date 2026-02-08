@@ -1,5 +1,6 @@
 """
-AWB Gemini Parser - Parser de relevés Attijariwafa Bank utilisant Gemini Vision.
+Generic Gemini Parser - Parser de relevés bancaires utilisant Gemini Vision.
+Supporte automatiquement toutes les banques marocaines (AWB, Bank of Africa, Crédit Agricole, etc.)
 """
 
 from pathlib import Path
@@ -14,20 +15,18 @@ from .base import BaseParser
 
 class AWBGeminiParser(BaseParser):
     """
-    Parser pour les relevés Attijariwafa Bank utilisant Gemini Vision API.
+    Parser générique pour relevés bancaires utilisant Gemini Vision API.
     
-    Avantages par rapport à l'OCR:
-    - Compréhension contextuelle du document
-    - Extraction structurée native (JSON)
-    - Meilleure gestion des tableaux et formats variés
+    Détecte automatiquement la banque (AWB, Bank of Africa, Crédit Agricole, etc.)
+    et extrait les transactions quelle que soit la mise en page.
     """
     
-    def __init__(self, model: str = "gemini-2.0-flash"):
+    def __init__(self, model: str = "gemini-3-flash-preview"):
         """
         Initialise le parser.
         
         Args:
-            model: Modèle Gemini à utiliser (défaut: gemini-2.0-flash)
+            model: Modèle Gemini à utiliser (défaut: gemini-3-flash-preview)
         """
         self.model = model
     

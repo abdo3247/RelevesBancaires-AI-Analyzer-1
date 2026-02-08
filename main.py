@@ -81,13 +81,13 @@ def main():
         model = st.selectbox(
             "🤖 Modèle Gemini",
             options=[
-                "gemini-2.5-flash",
-                "gemini-2.5-pro", 
                 "gemini-3-flash-preview",
-                "gemini-3-pro-preview"
+                "gemini-3-pro-preview",
+                "gemini-2.5-flash",
+                "gemini-2.5-pro"
             ],
             index=0,
-            help="Gemini 2.5 Flash = rapide et stable, Gemini 3 = les plus récents (preview)"
+            help="Gemini 3 Flash = le plus récent et rapide, Gemini 2.5 = stable"
         )
         st.session_state["gemini_model"] = model
         
@@ -130,17 +130,28 @@ def show_upload_section():
     with col2:
         st.markdown("**Ou depuis data/raw:**")
         data_dir = Path("data/raw")
-        # Support multipes extensions en local
+        # Support multiples extensions et sous-dossiers (AWB, Bank of Africa, Crédit Agricole...)
         existing_files = []
         if data_dir.exists():
             for ext in [".pdf", ".png", ".jpg", ".jpeg"]:
-                existing_files.extend(list(data_dir.glob(f"*{ext}")))
+                # Recherche récursive dans tous les sous-dossiers
+                existing_files.extend(list(data_dir.glob(f"**/*{ext}")))
         
-        selected_local_files = st.multiselect(
+        # Afficher avec le nom du dossier parent (banque)
+        file_options = {}
+        for f in existing_files:
+            bank_folder = f.parent.name if f.parent != data_dir else "Autres"
+            display_name = f"{bank_folder} / {f.name}"
+            file_options[display_name] = f
+        
+        selected_display_names = st.multiselect(
             "Fichiers locaux",
-            options=[f.name for f in existing_files],
+            options=sorted(file_options.keys()),
             default=[]
         )
+        # Convertir les noms affichés en chemins réels
+        selected_local_files = [file_options[name].name for name in selected_display_names]
+        selected_local_paths = [file_options[name] for name in selected_display_names]
 
     # Combiner les fichiers à traiter
     files_to_process = []
@@ -159,9 +170,10 @@ def show_upload_section():
                 tmp.write(uf.read())
                 files_to_process.append({"path": Path(tmp.name), "name": uf.name})
     
-    if selected_local_files:
-        for f_name in selected_local_files:
-             files_to_process.append({"path": data_dir / f_name, "name": f_name})
+    if selected_display_names:
+        for display_name in selected_display_names:
+            full_path = file_options[display_name]
+            files_to_process.append({"path": full_path, "name": full_path.name})
 
     # Résumé et Action
     if files_to_process:
@@ -207,7 +219,7 @@ def show_upload_section():
 
 def process_single_file(file_path: Path, status_callback=None):
     """Traite un fichier unique et sauvegarde en silence."""
-    model = st.session_state.get("gemini_model", "gemini-2.5-flash")
+    model = st.session_state.get("gemini_model", "gemini-3-flash-preview")
     parser = AWBGeminiParser(model=model)
     releve = parser.parse(file_path, status_callback=status_callback)
     

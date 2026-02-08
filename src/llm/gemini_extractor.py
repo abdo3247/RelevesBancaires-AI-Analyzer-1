@@ -181,7 +181,7 @@ def extract_bank_statement(
             contents=parts,
             config=types.GenerateContentConfig(
                 temperature=0.1,
-                max_output_tokens=16384,  # Augmenté pour les gros relevés
+                max_output_tokens=32768,  # Max pour les relevés multi-pages volumineux
             )
         )
     except Exception as api_error:

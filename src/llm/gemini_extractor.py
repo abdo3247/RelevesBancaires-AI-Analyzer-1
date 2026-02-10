@@ -213,21 +213,54 @@ def extract_bank_statement(
     clean_text = clean_json_response(response_text)
     
     # Tenter de réparer un JSON tronqué
-    if not clean_text.rstrip().endswith("}"):
-        # La réponse est probablement tronquée, essayer de fermer le JSON
-        clean_text = clean_text.rstrip()
-        # Compter les accolades ouvertes
-        open_braces = clean_text.count("{") - clean_text.count("}")
-        open_brackets = clean_text.count("[") - clean_text.count("]")
-        # Fermer les structures ouvertes
-        clean_text += "]" * open_brackets + "}" * open_braces
+    def repair_truncated_json(text: str) -> str:
+        """Répare un JSON tronqué en trouvant la dernière transaction complète."""
+        text = text.rstrip()
+        
+        # Si déjà valide, retourner tel quel
+        if text.endswith("}"):
+            try:
+                json.loads(text)
+                return text
+            except:
+                pass
+        
+        # Trouver la dernière transaction complète (se termine par })
+        # Chercher le dernier "}" suivi de "," ou "]"
+        last_complete = -1
+        for i in range(len(text) - 1, -1, -1):
+            if text[i] == '}':
+                # Vérifier si c'est une fin de transaction (suivie de , ou ])
+                rest = text[i+1:].strip()
+                if rest.startswith(',') or rest.startswith(']') or rest == '':
+                    # Essayer de parser jusqu'ici + fermetures
+                    test_text = text[:i+1]
+                    # Compter les structures ouvertes
+                    open_braces = test_text.count("{") - test_text.count("}")
+                    open_brackets = test_text.count("[") - test_text.count("]")
+                    # Fermer les structures
+                    closed = test_text + "]" * open_brackets + "}" * open_braces
+                    try:
+                        json.loads(closed)
+                        return closed
+                    except:
+                        continue
+        
+        # Fallback: fermer brutalement
+        open_braces = text.count("{") - text.count("}")
+        open_brackets = text.count("[") - text.count("]")
+        return text + "]" * open_brackets + "}" * open_braces
     
     try:
         data = json.loads(clean_text)
-    except json.JSONDecodeError as e:
-        # Afficher une portion plus courte de la réponse pour le debug
-        preview = response_text[:500] + "..." if len(response_text) > 500 else response_text
-        raise Exception(f"Erreur de parsing JSON (réponse potentiellement tronquée): {e}\nAperçu: {preview}")
+    except json.JSONDecodeError:
+        # Tenter la réparation
+        repaired = repair_truncated_json(clean_text)
+        try:
+            data = json.loads(repaired)
+        except json.JSONDecodeError as e:
+            preview = response_text[:500] + "..." if len(response_text) > 500 else response_text
+            raise Exception(f"Erreur de parsing JSON (réponse potentiellement tronquée): {e}\nAperçu: {preview}")
     
     return data
 

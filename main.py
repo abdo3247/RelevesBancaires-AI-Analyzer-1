@@ -23,6 +23,7 @@ st.set_page_config(
 from src.parsers.awb_gemini_parser import AWBGeminiParser
 import src.database as db
 import src.analysis as analysis
+import src.charts as charts
 
 def format_currency(amount: Decimal) -> str:
     """Formate un montant en devise (MAD)."""
@@ -96,8 +97,8 @@ def main():
 
 
     # --- Onglets Principaux ---
-    tab_upload, tab_history, tab_analysis, tab_clients = st.tabs([
-        "📤 Import", "📜 Historique", "🕵️ Audit & Fusion", "👥 Clients & Comptes"
+    tab_upload, tab_history, tab_analysis, tab_stats, tab_clients = st.tabs([
+        "📤 Import", "📜 Historique", "🕵️ Audit & Fusion", "📊 Statistiques", "👥 Clients & Comptes"
     ])
 
     with tab_upload:
@@ -108,6 +109,9 @@ def main():
 
     with tab_analysis:
         show_analysis_section()
+
+    with tab_stats:
+        show_statistics_section()
 
     with tab_clients:
         show_clients_section()
@@ -651,6 +655,229 @@ def show_clients_section():
                     st.rerun()
         else:
             st.info("Aucun autre client disponible pour fusion.")
+
+
+def show_statistics_section():
+    """Onglet 5 : Statistiques et Graphiques"""
+    st.header("📊 Statistiques et Analyses")
+    
+    # Récupérer tous les relevés
+    all_releves = db.get_all_releves()
+    
+    if not all_releves:
+        st.info("📭 Aucun relevé disponible. Importez des fichiers d'abord.")
+        return
+    
+    # Extraire années et mois des périodes
+    from src.analysis import parse_period
+    for r in all_releves:
+        period_obj = parse_period(r['periode'])
+        r['annee'] = period_obj.year
+        r['mois'] = period_obj.month
+    
+    # --- FILTRES EN CASCADE ---
+    st.subheader("🔍 Filtres")
+    
+    # Ligne 1 : Client et Banque
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        # Liste des clients
+        all_clients = sorted(list(set(r['titulaire'] for r in all_releves if r['titulaire'])))
+        selected_clients = st.multiselect(
+            "👤 Clients",
+            options=all_clients,
+            default=[],
+            placeholder="Tous les clients"
+        )
+    
+    # Filtrer pour obtenir les banques disponibles selon les clients sélectionnés
+    releves_after_client = all_releves
+    if selected_clients:
+        releves_after_client = [r for r in all_releves if r['titulaire'] in selected_clients]
+    
+    with col2:
+        # Banques disponibles (filtrées par client si sélectionné)
+        available_banks = sorted(list(set(r['banque'] for r in releves_after_client if r['banque'])))
+        selected_banks = st.multiselect(
+            "🏦 Banques",
+            options=available_banks,
+            default=[],
+            placeholder="Toutes les banques"
+        )
+    
+    # Filtrer pour obtenir les comptes disponibles
+    releves_after_bank = releves_after_client
+    if selected_banks:
+        releves_after_bank = [r for r in releves_after_client if r['banque'] in selected_banks]
+    
+    # Ligne 2 : Compte, Année, Mois
+    col3, col4, col5 = st.columns(3)
+    
+    with col3:
+        # Comptes disponibles (filtrés par client et banque)
+        available_accounts = sorted(list(set(r['compte'] for r in releves_after_bank if r['compte'])))
+        selected_accounts = st.multiselect(
+            "💳 Comptes",
+            options=available_accounts,
+            default=[],
+            placeholder="Tous les comptes"
+        )
+    
+    # Filtrer pour obtenir les années disponibles
+    releves_after_account = releves_after_bank
+    if selected_accounts:
+        releves_after_account = [r for r in releves_after_bank if r['compte'] in selected_accounts]
+    
+    with col4:
+        # Années disponibles
+        available_years = sorted(list(set(r['annee'] for r in releves_after_account)))
+        selected_years = st.multiselect(
+            "📅 Années",
+            options=available_years,
+            default=[],
+            placeholder="Toutes les années"
+        )
+    
+    # Filtrer pour obtenir les mois disponibles
+    releves_after_year = releves_after_account
+    if selected_years:
+        releves_after_year = [r for r in releves_after_account if r['annee'] in selected_years]
+    
+    with col5:
+        # Mois disponibles
+        month_names = {1: "Janvier", 2: "Février", 3: "Mars", 4: "Avril", 5: "Mai", 6: "Juin",
+                       7: "Juillet", 8: "Août", 9: "Septembre", 10: "Octobre", 11: "Novembre", 12: "Décembre"}
+        available_months = sorted(list(set(r['mois'] for r in releves_after_year)))
+        month_options = {month_names[m]: m for m in available_months}
+        selected_month_names = st.multiselect(
+            "🗓️ Mois",
+            options=list(month_options.keys()),
+            default=[],
+            placeholder="Tous les mois"
+        )
+        selected_months = [month_options[name] for name in selected_month_names]
+    
+    # --- APPLIQUER TOUS LES FILTRES ---
+    filtered_releves = all_releves
+    
+    if selected_clients:
+        filtered_releves = [r for r in filtered_releves if r['titulaire'] in selected_clients]
+    if selected_banks:
+        filtered_releves = [r for r in filtered_releves if r['banque'] in selected_banks]
+    if selected_accounts:
+        filtered_releves = [r for r in filtered_releves if r['compte'] in selected_accounts]
+    if selected_years:
+        filtered_releves = [r for r in filtered_releves if r['annee'] in selected_years]
+    if selected_months:
+        filtered_releves = [r for r in filtered_releves if r['mois'] in selected_months]
+    
+    # Afficher le résumé des filtres
+    nb_releves = len(filtered_releves)
+    st.info(f"📋 **{nb_releves}** relevé(s) sélectionné(s)")
+    
+    if not filtered_releves:
+        st.warning("Aucun relevé pour cette sélection. Modifiez les filtres.")
+        return
+    
+    # Récupérer toutes les transactions des relevés filtrés
+    all_transactions = []
+    total_solde_initial = 0
+    
+    for releve in filtered_releves:
+        releve_id = releve['id']
+        transactions = db.get_releve_transactions(releve_id)
+        all_transactions.extend(transactions)
+        if releve.get('solde_initial'):
+            total_solde_initial = releve['solde_initial']
+    
+    if not all_transactions:
+        st.warning("Aucune transaction dans les relevés sélectionnés.")
+        return
+    
+    st.divider()
+    
+    # --- KPIs ---
+    st.subheader("📈 Indicateurs Clés")
+    kpis = charts.calculate_kpis(all_transactions)
+    
+    kpi_cols = st.columns(4)
+    
+    with kpi_cols[0]:
+        st.metric(
+            label="💰 Total Crédits",
+            value=f"{kpis['total_credit']:,.2f} MAD".replace(",", " "),
+            delta=f"+{kpis['nb_transactions']} transactions"
+        )
+    
+    with kpi_cols[1]:
+        st.metric(
+            label="💸 Total Débits",
+            value=f"{kpis['total_debit']:,.2f} MAD".replace(",", " "),
+            delta=f"Moy: {kpis['avg_debit']:,.0f} MAD"
+        )
+    
+    with kpi_cols[2]:
+        balance_color = "normal" if kpis['balance'] >= 0 else "inverse"
+        st.metric(
+            label="📊 Balance Nette",
+            value=f"{kpis['balance']:,.2f} MAD".replace(",", " "),
+            delta_color=balance_color
+        )
+    
+    with kpi_cols[3]:
+        st.metric(
+            label="🏆 Top Catégorie",
+            value=kpis['top_category'],
+            delta=f"Max débit: {kpis['max_debit']:,.0f} MAD"
+        )
+    
+    st.divider()
+    
+    # --- Graphiques ---
+    st.subheader("📉 Visualisations")
+    
+    # Graphique 1 : Évolution du solde
+    fig_balance = charts.plot_balance_evolution(all_transactions, total_solde_initial)
+    st.plotly_chart(fig_balance, use_container_width=True)
+    
+    # Deux graphiques côte à côte
+    chart_col1, chart_col2 = st.columns(2)
+    
+    with chart_col1:
+        # Graphique 2 : Débits vs Crédits
+        fig_bars = charts.plot_debit_credit_bars(all_transactions)
+        st.plotly_chart(fig_bars, use_container_width=True)
+    
+    with chart_col2:
+        # Graphique 3 : Catégories de dépenses
+        fig_pie = charts.plot_expense_categories(all_transactions)
+        st.plotly_chart(fig_pie, use_container_width=True)
+    
+    # --- Tableau des transactions par catégorie ---
+    st.divider()
+    st.subheader("📋 Détail par Catégorie")
+    
+    df = charts.prepare_transactions_df(all_transactions)
+    if not df.empty and 'categorie' in df.columns:
+        category_summary = df.groupby('categorie').agg({
+            'debit': 'sum',
+            'credit': 'sum'
+        }).reset_index()
+        category_summary['total'] = category_summary['credit'] - category_summary['debit']
+        category_summary.columns = ['Catégorie', 'Débits', 'Crédits', 'Balance']
+        category_summary = category_summary.sort_values('Débits', ascending=False)
+        
+        st.dataframe(
+            category_summary.style.format({
+                'Débits': '{:,.2f}',
+                'Crédits': '{:,.2f}',
+                'Balance': '{:,.2f}'
+            }),
+            use_container_width=True,
+            hide_index=True
+        )
+
 
 if __name__ == "__main__":
     main()
